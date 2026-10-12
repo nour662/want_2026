@@ -147,10 +147,15 @@ def parse_sam_entity_fields(fields: List[str]) -> Optional[Dict[str, Optional[st
     if not fields:
         return None
 
+    registration_status = _clean_value(fields[5], FIELD_LENGTH_LIMITS["registration_status"]) if len(fields) > 5 else None
+    is_active = None
+    if registration_status:
+        is_active = registration_status.upper() == "A"
+
     return {
         "uei": _clean_value(fields[0], FIELD_LENGTH_LIMITS["uei"]) if len(fields) > 0 else None,
         "cage_code": _clean_value(fields[3], FIELD_LENGTH_LIMITS["cage_code"]) if len(fields) > 3 else None,
-        "registration_status": _clean_value(fields[5], FIELD_LENGTH_LIMITS["registration_status"]) if len(fields) > 5 else None,
+        "registration_status": registration_status,
         "entity_type_code": _clean_value(fields[6], FIELD_LENGTH_LIMITS["entity_type_code"]) if len(fields) > 6 else None,
         "registration_date": _clean_value(fields[7], FIELD_LENGTH_LIMITS["registration_date"]) if len(fields) > 7 else None,
         "expiration_date": _clean_value(fields[8], FIELD_LENGTH_LIMITS["expiration_date"]) if len(fields) > 8 else None,
@@ -166,6 +171,8 @@ def parse_sam_entity_fields(fields: List[str]) -> Optional[Dict[str, Optional[st
         "zip4": _clean_value(fields[20], FIELD_LENGTH_LIMITS["zip4"]) if len(fields) > 20 else None,
         "country": _clean_value(fields[21], FIELD_LENGTH_LIMITS["country"]) if len(fields) > 21 else None,
         "congressional_district": _clean_value(fields[22], FIELD_LENGTH_LIMITS["congressional_district"]) if len(fields) > 22 else None,
+        "website": _clean_value(fields[26]) if len(fields) > 26 else None,
+        "is_active": is_active,
     }
 
 
@@ -183,30 +190,37 @@ def _dedupe_by_uei(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
     return list(deduped.values()) + rows_without_uei
 
 
-def upsert_sam_entities(db: Session, rows: List[Dict[str, object]]) -> Tuple[int, int]:
+def upsert_sam_entities(db: Session, rows: List[Dict[str, object]]) -> Tuple[int, int, int]:
     if not rows:
-        return 0, 0
+        return 0, 0, 0
 
     normalized_rows = _dedupe_by_uei(rows)
+    dedupe_skipped = len(rows) - len(normalized_rows)
     ueis = sorted({str(row["uei"]) for row in normalized_rows if row.get("uei")})
     existing_rows = (
-        db.query(SamEntityPublicV2.uei)
+        db.query(SamEntityPublicV2.id, SamEntityPublicV2.uei)
         .filter(SamEntityPublicV2.uei.in_(ueis))
         .all()
     )
-    existing_ueis = {uei for (uei,) in existing_rows if uei}
+    existing_map = {uei: record_id for (record_id, uei) in existing_rows if uei}
 
-    inserts = [
-        row
-        for row in normalized_rows
-        if row.get("uei") not in existing_ueis
-    ]
-    skipped = len(normalized_rows) - len(inserts)
+    inserts: List[Dict[str, object]] = []
+    updates: List[Dict[str, object]] = []
+    for row in normalized_rows:
+        uei = row.get("uei")
+        if uei and uei in existing_map:
+            row_update = dict(row)
+            row_update["id"] = existing_map[uei]
+            updates.append(row_update)
+        else:
+            inserts.append(row)
 
     if inserts:
         db.bulk_insert_mappings(SamEntityPublicV2, inserts)
+    if updates:
+        db.bulk_update_mappings(SamEntityPublicV2, updates)
 
-    return len(inserts), skipped
+    return len(inserts), len(updates), dedupe_skipped
 
 
 def upsert_companies(db: Session, entities: List[Dict[str, Optional[str]]]) -> Tuple[int, int]:
@@ -352,7 +366,7 @@ def process_sam_sync(db: Optional[Session] = None, max_rows: Optional[int] = Non
             records_processed += 1
 
             if len(sam_batch) >= SYNC_BATCH_SIZE:
-                raw_inserted, raw_skipped = upsert_sam_entities(active_db, sam_batch)
+                raw_inserted, raw_updated, raw_skipped = upsert_sam_entities(active_db, sam_batch)
                 active_db.commit()
                 try:
                     upsert_companies(active_db, company_batch)
@@ -362,6 +376,7 @@ def process_sam_sync(db: Optional[Session] = None, max_rows: Optional[int] = Non
                     active_db.rollback()
                     sync_status["last_error"] = f"Company sync warning: {company_exc}"
                 new_records += raw_inserted
+                updated_records += raw_updated
                 skipped_records += raw_skipped
                 sync_status["records_processed"] = records_processed
                 sync_status["new_records"] = new_records
@@ -374,7 +389,7 @@ def process_sam_sync(db: Optional[Session] = None, max_rows: Optional[int] = Non
                 break
 
         if sam_batch:
-            raw_inserted, raw_skipped = upsert_sam_entities(active_db, sam_batch)
+            raw_inserted, raw_updated, raw_skipped = upsert_sam_entities(active_db, sam_batch)
             active_db.commit()
             try:
                 upsert_companies(active_db, company_batch)
@@ -384,6 +399,7 @@ def process_sam_sync(db: Optional[Session] = None, max_rows: Optional[int] = Non
                 active_db.rollback()
                 sync_status["last_error"] = f"Company sync warning: {company_exc}"
             new_records += raw_inserted
+            updated_records += raw_updated
             skipped_records += raw_skipped
 
         sync_status.update(
@@ -401,7 +417,7 @@ def process_sam_sync(db: Optional[Session] = None, max_rows: Optional[int] = Non
 
         return {
             "success": True,
-            "message": "Successfully downloaded the SAM.gov extract and synced only brand-new UEIs into the database tables.",
+            "message": "Successfully downloaded the SAM.gov extract and upserted SAM entities (including inactive status changes).",
             "records_processed": records_processed,
             "new_records": new_records,
             "updated_records": updated_records,

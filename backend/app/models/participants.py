@@ -21,7 +21,8 @@ class Participants(Base):
     __tablename__ = "participants"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    primary_email = Column(String(320), unique=True, nullable=False)
+    eid = Column(String(50), unique=True, nullable=True, index=True)
+    primary_email = Column(String(320), unique=True, nullable=True)
     first_name = Column(String(100), nullable=False)
     last_name = Column(String(100), nullable=False)
     _full_name = Column("full_name", String(255), nullable=True)
@@ -84,6 +85,10 @@ class ParticipantListEntry(Base):
     raw_title = Column(String, nullable=True)
     raw_team_name = Column(String, nullable=True)
     raw_role = Column(String, nullable=True)
+    raw_company_name = Column(String, nullable=True)
+    raw_uei = Column(String, nullable=True)
+    raw_duns = Column(String, nullable=True)
+    raw_website = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(

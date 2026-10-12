@@ -36,17 +36,30 @@ class Company(Base):
     sbir_url = Column(String, nullable=True)
     uei = Column(String, nullable=True)
     duns = Column(String, nullable=True)
+    cage_code = Column(String, nullable=True)
+    entity_type_code = Column(String, nullable=True)
+    dba_name = Column(String, nullable=True)
     address1 = Column(String, nullable=True)
     address2 = Column(String, nullable=True)
     city = Column(String, nullable=True)
     state = Column(String, nullable=True)
     zip = Column(String, nullable=True)
+    congressional_district = Column(String, nullable=True)
+    legislative_district = Column(String, nullable=True)
+    incorporation_state = Column(String, nullable=True)
+    incorporation_country = Column(String, nullable=True)
+    naics = Column(String, nullable=True)
     company_url = Column(String, nullable=True)
     hubzone_owned = Column(Boolean, nullable=True)
     socially_economically_disadvantaged = Column(Boolean, nullable=True)
     woman_owned = Column(Boolean, nullable=True)
+    minority_owned = Column(Boolean, nullable=True)
     number_awards = Column(Integer, nullable=True)
     number_employees = Column(Integer, nullable=True)
+    annual_revenue_range = Column(String, nullable=True)
+    currently_active = Column(Boolean, nullable=True)
+    merger_info = Column(Text, nullable=True)
+    pitchbook_id = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),
@@ -61,6 +74,7 @@ class Company(Base):
         Index("ix_companies_domain", "domain"),
         Index("ix_companies_uei", "uei"),
         Index("ix_companies_duns", "duns"),
+        Index("ix_companies_pitchbook_id", "pitchbook_id"),
     )
 
     company_name = synonym("name")

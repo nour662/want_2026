@@ -3,11 +3,11 @@ services:
     image: postgres:15-alpine
     container_name: want_postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: want_db
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-want_db}
     ports:
-      - "5433:5432"
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -36,8 +36,8 @@ services:
       dockerfile: Dockerfile
     container_name: want_backend
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/want_db
-      PG_DSN: dbname=want_db user=postgres password=postgres host=postgres port=5432
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/want_db}
+      PG_DSN: ${PG_DSN:-dbname=want_db user=postgres password=postgres host=postgres port=5432}
       REDIS_URL: redis://redis:6379/0
       APP_ENV: ${APP_ENV:-development}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}

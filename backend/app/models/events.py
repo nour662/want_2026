@@ -11,6 +11,7 @@ class Event(Base):
     __tablename__ = "events"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cohort_id = Column(String, nullable=True, index=True)
     hub_organization_id = Column(
         UUID(as_uuid=True),
         ForeignKey("hub_organizations.id"),

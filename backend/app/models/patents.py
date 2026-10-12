@@ -22,6 +22,8 @@ class Patent(Base):
 	grant_date = Column(Date, nullable=True)
 	assignee_name = Column(String, nullable=True)
 	inventors = Column(Text, nullable=True)
+	cpc_codes = Column(Text, nullable=True)  # comma-separated CPC classification codes
+	publication_number = Column(String, nullable=True)
 	source_url = Column(String, nullable=True)
 	created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 	updated_at = Column(
@@ -34,5 +36,6 @@ class Patent(Base):
 	__table_args__ = (
 	 Index("ix_patents_patent_number", "patent_number"),
 	 Index("ix_patents_application_number", "application_number"),
+	 Index("ix_patents_publication_number", "publication_number"),
 	 Index("ix_patents_company", "company_id"),
 	)

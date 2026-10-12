@@ -201,6 +201,12 @@ def _serialize_funding_record(record: FundingRecord) -> FundingRecordItemRespons
     )
 
 
+def _is_national_cohort_name(cohort_name: Optional[str]) -> bool:
+    if not cohort_name:
+        return False
+    return "national cohort" in cohort_name.strip().lower()
+
+
 class CompanyAssociatedParticipantResponse(BaseModel):
     participant_id: Optional[UUID] = None
     full_name: str
@@ -620,13 +626,14 @@ def get_company_profile(
                 )
             )
 
-    cohort_dates = [
+    regional_cohort_dates = [
         ((cohort.end_date or cohort.start_date).date() if hasattr((cohort.end_date or cohort.start_date), "date") else (cohort.end_date or cohort.start_date))
         for cohort in associated_cohorts
-        if cohort.end_date or cohort.start_date
+        if (cohort.end_date or cohort.start_date) and not _is_national_cohort_name(cohort.cohort_name)
     ]
-    icorps_cutoff = min(cohort_dates, default=None)
-    funding_received_post_icorps = sum(
+    has_only_national_cohorts = bool(associated_cohorts) and not regional_cohort_dates
+    icorps_cutoff = min(regional_cohort_dates, default=None)
+    funding_received_post_icorps = 0.0 if has_only_national_cohorts else sum(
         float(record.amount_usd or record.award_amount or 0)
         for record in funding_records
         if not icorps_cutoff or not record.date_awarded or record.date_awarded >= icorps_cutoff
@@ -813,7 +820,7 @@ def get_company_intelligence(company_id: UUID, db: Session = Depends(get_db)):
     funding_item_rows = [_serialize_funding_record(record) for record in funding_records]
 
     icorps_dates = (
-        db.query(Event.start_date)
+        db.query(Event.name, Event.start_date)
         .join(ParticipantList, ParticipantList.event_id == Event.id)
         .join(ParticipantListEntry, ParticipantListEntry.participant_list_id == ParticipantList.id)
         .join(ParticipantCompanyMatch, ParticipantCompanyMatch.participant_list_entry_id == ParticipantListEntry.id)
@@ -824,15 +831,20 @@ def get_company_intelligence(company_id: UUID, db: Session = Depends(get_db)):
         )
         .all()
     )
+    regional_icorps_dates = [
+        (date_value.date() if hasattr(date_value, "date") else date_value)
+        for (event_name, date_value) in icorps_dates
+        if date_value is not None and not _is_national_cohort_name(event_name)
+    ]
+    has_only_national_cohorts = bool(icorps_dates) and not regional_icorps_dates
     icorps_cutoff = min(
         (
-            date_value.date() if hasattr(date_value, "date") else date_value
-            for (date_value,) in icorps_dates
-            if date_value is not None
+            date_value
+            for date_value in regional_icorps_dates
         ),
         default=None,
     )
-    funding_received_post_icorps = sum(
+    funding_received_post_icorps = 0.0 if has_only_national_cohorts else sum(
         float(record.amount_usd or record.award_amount or 0)
         for record in funding_records
         if not icorps_cutoff or not record.date_awarded or record.date_awarded >= icorps_cutoff

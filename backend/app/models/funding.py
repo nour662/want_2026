@@ -1,6 +1,7 @@
 import uuid
 
 from sqlalchemy import (
+ Boolean,
  Column,
  Date,
  DateTime,
@@ -29,12 +30,19 @@ class FundingRecord(Base):
 	funding_source = Column(
 		Enum(
 			"Angel",
+			"Accelerator or Incubator",
+			"Competition or Prize",
+			"Cooperative Agreement",
+			"Definitive Contract",
+			"Delivery Order",
+			"Equity Crowdfunding",
 			"Federal",
 			"Grant",
 			"MIPS",
 			"NIH",
 			"NSF I-Corps",
 			"Other",
+			"Purchase Order",
 			"SBIR",
 			"Series",
 			"STTR",
@@ -51,6 +59,7 @@ class FundingRecord(Base):
 			"Stage 3: Early Stage Investment (Series A & B)",
 			"Stage 4: Later Stage Investment (Series C, D, etc.)",
 			"Stage 5: Mezzanine Financing",
+			"Stage 6: Revenue & Commercial Traction",
 			name="funding_stage",
 		),
 		nullable=True,
@@ -66,6 +75,7 @@ class FundingRecord(Base):
 	award_link = Column(String, nullable=True)
 	investors = Column(Text, nullable=True)
 	additional_info = Column(Text, nullable=True)
+	received_post_icorps = Column(Boolean, nullable=True)
 
 	funding_type = Column(String, nullable=True)
 	funder_name = Column(String, nullable=True)

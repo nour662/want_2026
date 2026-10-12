@@ -252,6 +252,7 @@ def parse_sam_entity_fields(fields: List[str]) -> Optional[Dict[str, str]]:
         "zip4": fields[20] if len(fields) > 20 else None,
         "country": fields[21] if len(fields) > 21 else None,
         "congressional_district": fields[22] if len(fields) > 22 else None,
+        "website": fields[26] if len(fields) > 26 else None,
     }
 
 

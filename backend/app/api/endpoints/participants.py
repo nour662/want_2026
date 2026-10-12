@@ -24,15 +24,17 @@ REQUIRED_COLUMNS = {
     "first_name",
     "last_name",
     "email",
-    "team_description",
 }
 
 OPTIONAL_COLUMN_ALIASES = {
+    "team_description": ["team_description", "description"],
     "university_affiliation": ["university_affiliation", "affiliation", "university"],
     "linkedin_url": ["linkedin_url", "linkedin"],
     "optional_uei": ["optional_uei", "uei"],
     "optional_duns": ["optional_duns", "duns"],
-    "company_website": ["company_website", "website", "company_url", "url"],
+    "company_website": ["company_website", "website", "company_url", "url", "website_url"],
+    "company_name": ["company_name", "company"],
+    "cohort_name": ["cohort_name", "cohort"],
     "role": ["role", "title", "participant_title"],
 }
 
@@ -391,7 +393,9 @@ def upload_participants_csv(
         )
 
         notes_parts = []
-        team_description = (row.get(field_map["team_description"]) or "").strip()
+        team_desc_field = field_map.get("team_description")
+        team_description = (row.get(team_desc_field) if team_desc_field else None) or ""
+        team_description = team_description.strip()
         if team_description:
             notes_parts.append(team_description)
 
@@ -415,6 +419,12 @@ def upload_participants_csv(
             notes_parts.append(f"Website: {company_website}")
         notes = " | ".join(notes_parts) if notes_parts else None
 
+        # Resolve optional company name and cohort name
+        company_name_field = field_map.get("company_name")
+        cohort_name_field = field_map.get("cohort_name")
+        raw_company_name = ((row.get(company_name_field) if company_name_field else None) or "").strip() or None
+        raw_cohort_name = ((row.get(cohort_name_field) if cohort_name_field else None) or "").strip() or None
+
         entry = ParticipantListEntry(
             participant_list_id=participant_list.id,
             participant_id=participant.id,
@@ -424,6 +434,10 @@ def upload_participants_csv(
             raw_affiliation=raw_affiliation,
             raw_title=raw_title,
             raw_team_name=(row.get(field_map["team_name"]) or "").strip() or None,
+            raw_company_name=raw_company_name,
+            raw_uei=optional_uei or None,
+            raw_duns=optional_duns or None,
+            raw_website=company_website or None,
             notes=notes,
         )
         db.add(entry)

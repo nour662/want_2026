@@ -12,7 +12,7 @@ class ParticipantList(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     event_id = Column(UUID(as_uuid=True), ForeignKey("events.id"), nullable=False)
-    published_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    published_by_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     university_id = Column(UUID(as_uuid=True), ForeignKey("universities.id"), nullable=True)
     title = Column(String, nullable=False)
     source_type = Column(String, nullable=True)
