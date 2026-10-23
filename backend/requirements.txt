@@ -16,3 +16,4 @@ email-validator==2.1.0
 openpyxl==3.1.2
 pandas>=2.0.0
 
+certifi>=2026.10.19  # eMudhra CA key compromise (CVE-2026-111943)
