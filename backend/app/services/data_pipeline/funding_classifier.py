@@ -15,6 +15,7 @@ Stages:
     Stage 6: Revenue & Commercial Traction
 """
 
+import re
 from decimal import Decimal
 from typing import Optional, Tuple
 
@@ -39,6 +40,7 @@ VALID_FUNDING_SOURCES = frozenset(
         "Angel",
         "Equity Crowdfunding",
         "Series",
+        "TEDCO",
         "Other",
     }
 )
@@ -74,7 +76,14 @@ _SOURCE_KEYWORD_MAP = [
     ("Equity Crowdfunding", ["equity crowdfunding", "crowdfund"]),
     ("Venture Capital", ["venture capital", "vc ", " vc", "private equity"]),
     ("Series", ["series a", "series b", "series c", "series d", "series e", "series f"]),
+    ("TEDCO", ["tedco"]),
 ]
+
+
+def _contains_word(blob: str, keyword: str) -> bool:
+    """Whole-word match so "nsf" does not fire inside "transfer"."""
+    keyword = keyword.strip()
+    return re.search(r"(?<![a-z0-9])" + re.escape(keyword) + r"(?![a-z0-9])", blob) is not None
 
 
 def classify_funding_source(
@@ -110,7 +119,7 @@ def classify_funding_source(
     ).lower()
 
     for source_label, keywords in _SOURCE_KEYWORD_MAP:
-        if any(kw in blob for kw in keywords):
+        if any(_contains_word(blob, kw) for kw in keywords):
             return source_label
 
     return "Other"
@@ -192,6 +201,14 @@ def classify_funding_stage(
             if amount <= _GRANT_SEED_THRESHOLD:
                 return "Stage 1: Pre-Seed Funding"
             return "Stage 2: Seed Funding"
+
+    if src == "TEDCO":
+        if amount is not None:
+            if amount <= Decimal("250000"):
+                return "Stage 1: Pre-Seed Funding"
+            if amount <= _VC_SEED_MAX:
+                return "Stage 2: Seed Funding"
+            return "Stage 3: Early Stage Investment (Series A & B)"
 
     if src == "Cooperative Agreement":
         if amount is not None:
@@ -275,8 +292,9 @@ def _is_phase(phase: Optional[str], number: int) -> bool:
     """Return True if the phase string refers to the given phase number."""
     if not phase:
         return False
-    p = phase.strip().lower()
-    return p in (str(number), f"phase {number}", f"phase{number}", f"i" if number == 1 else "ii")
+    p = re.sub(r"[^a-z0-9]", "", phase.strip().lower()).removeprefix("phase")
+    roman = {1: "i", 2: "ii", 3: "iii"}.get(number, "")
+    return p in (str(number), roman)
 
 
 def _extract_series_letter(text: str) -> str:
@@ -284,6 +302,5 @@ def _extract_series_letter(text: str) -> str:
     Try to extract a series letter from a free-text string.
     E.g. "Series A Funding" → "a"
     """
-    import re
     match = re.search(r"\bseries\s+([a-g])\b", text.lower())
     return match.group(1) if match else ""

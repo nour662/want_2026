@@ -73,3 +73,7 @@ dist/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# WATN pipeline cache (SBIR bulk file, TEDCO articles) and run outputs
+backend/.cache/
+backend/outputs/
