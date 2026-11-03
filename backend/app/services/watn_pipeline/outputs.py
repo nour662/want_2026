@@ -5,7 +5,8 @@ finalized_results/
     company_info.csv          one row per participant company
     funding_info.csv          publishable funding records (Salesforce-ready columns)
     new_funding_records.csv   records not already in the baseline export (when given)
-    review_queue.csv          funding records and identity matches a person should check
+    patents.csv               USPTO applications owned by the company (accepted matches)
+    review_queue.csv          funding records, patents and identity matches a person should check
 run_report.json               coverage, match quality and merge statistics
 
 Column names follow the existing WATN/Salesforce exports so the files can be
@@ -25,9 +26,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.services.watn_pipeline.evaluate import evaluate_funding, is_publishable
-from app.services.watn_pipeline.matching import normalize_id, normalize_name
+from app.services.watn_pipeline.matching import is_accepted, normalize_id, normalize_name
 from app.services.watn_pipeline.merge import award_key, awards_equal
-from app.services.watn_pipeline.models import CompanyResult, FundingRecord
+from app.services.watn_pipeline.models import CompanyResult, FundingRecord, MatchEvidence, PatentRecord
 from app.services.watn_pipeline.normalize import clean_str, is_blank, parse_amount, parse_date
 
 FUNDING_COLUMNS = [
@@ -44,8 +45,15 @@ COMPANY_COLUMNS = [
     "Street Address", "City", "State", "Zip Code", "Country", "Legislative District", "NAICS",
     "SAM Registration Date", "Incorporation State", "Incorporation Country", "Incorporation Type",
     "Woman Owned", "HUBZone Owned", "Socially and Economically Disadvantaged", "University Affiliation",
-    "Funding Records", "Total Funding", "Identity Match Score", "Identity Match Tier",
+    "Funding Records", "Total Funding", "Patents", "Granted Patents", "Identity Match Score", "Identity Match Tier",
     "Identity Match Method", "Identity Match Reasons", "Field Sources", "Source Status", "Review Flags",
+]
+
+PATENT_COLUMNS = [
+    "Account Name", "I-Corps Team: CorpID", "UEI", "Patent Title", "Application Number", "Patent Number",
+    "Publication Number", "Status", "Application Type", "Filing Date", "Publication Date", "Grant Date",
+    "Owner", "Owner Role", "Owner State", "Inventors", "CPC Codes", "Source Website",
+    "Filed Post I-Corps Participation", "Match Confidence", "Match Method", "Match Reasons",
 ]
 
 REVIEW_COLUMNS = ["Review Type", "Account Name", "UEI", "Detail"] + FUNDING_COLUMNS[5:]
@@ -67,7 +75,7 @@ def write_all(results: List[CompanyResult], out: Path, config: Any, unavailable:
     baseline = _load_baseline(config.baseline_funding) if config.baseline_funding else None
     next_id = _next_funding_id(baseline) if baseline else None
 
-    funding_rows, new_rows, review_rows, company_rows = [], [], [], []
+    funding_rows, new_rows, review_rows, company_rows, patent_rows = [], [], [], [], []
     for res in results:
         uei = _profile(res, "uei")
         published = [r for r in res.funding if is_publishable(r)]
@@ -89,20 +97,34 @@ def write_all(results: List[CompanyResult], out: Path, config: Any, unavailable:
             else:
                 row["Record Status"] = "Scraped Record"
             funding_rows.append(row)
+        patents = [p for p in res.patents if _patent_accepted(p)]
+        for patent in res.patents:
+            row = _patent_row(res, patent, uei)
+            if patent in patents:
+                patent_rows.append(row)
+            else:
+                detail = (f"patent {patent.application_number} '{patent.title or ''}' owned by '{patent.owner}' "
+                          f"({patent.confidence:.0f}): " + "; ".join(patent.match_reasons))
+                review_rows.append({"Review Type": "patent", "Account Name": res.company.name, "UEI": uei,
+                                    "Detail": detail, "Source Website": patent.source_url or ""})
         for reason in res.review_reasons:
             review_rows.append({"Review Type": "company", "Account Name": res.company.name, "UEI": uei, "Detail": reason})
         if res.status != "completed":
             review_rows.append({"Review Type": "error" if res.status == "failed" else "partial", "Account Name": res.company.name, "UEI": uei,
                                 "Detail": res.error or res.status})
-        company_rows.append(_company_row(res, published))
+        company_rows.append(_company_row(res, published, patents))
 
     _write_csv(final / "funding_info.csv", FUNDING_COLUMNS, funding_rows)
     _write_csv(final / "company_info.csv", COMPANY_COLUMNS, company_rows)
+    _write_csv(final / "patents.csv", PATENT_COLUMNS, patent_rows)
     _write_csv(final / "review_queue.csv", REVIEW_COLUMNS, review_rows)
     if baseline is not None:
         _write_csv(final / "new_funding_records.csv", FUNDING_COLUMNS, new_rows)
 
     report = _report(results, funding_rows, new_rows if baseline is not None else None, review_rows, unavailable)
+    report["patents_published"] = len(patent_rows)
+    report["patents_granted"] = sum(1 for r in patent_rows if r["Patent Number"])
+    report["companies_with_patents"] = len({r["Account Name"] for r in patent_rows})
     (out / "run_report.json").write_text(json.dumps(report, indent=2, default=str))
     return report
 
@@ -146,6 +168,40 @@ def _funding_row(res: CompanyResult, rec: FundingRecord, uei: Optional[str]) -> 
     }
 
 
+def _patent_accepted(patent: PatentRecord) -> bool:
+    return is_accepted(MatchEvidence(patent.confidence, patent.tier, patent.match_method))
+
+
+def _patent_row(res: CompanyResult, p: PatentRecord, uei: Optional[str]) -> Dict[str, Any]:
+    def iso(d: Optional[date]) -> str:
+        return d.isoformat() if d else ""
+
+    return {
+        "Account Name": res.company.name,
+        "I-Corps Team: CorpID": "; ".join(res.company.corp_ids),
+        "UEI": uei or "",
+        "Patent Title": p.title or "",
+        "Application Number": p.application_number,
+        "Patent Number": p.patent_number or "",
+        "Publication Number": p.publication_number or "",
+        "Status": p.status or "",
+        "Application Type": p.application_type or "",
+        "Filing Date": iso(p.filing_date),
+        "Publication Date": iso(p.publication_date),
+        "Grant Date": iso(p.grant_date),
+        "Owner": p.owner or "",
+        "Owner Role": p.owner_role or "",
+        "Owner State": p.owner_state or "",
+        "Inventors": "; ".join(p.inventors),
+        "CPC Codes": "; ".join(p.cpc_codes),
+        "Source Website": p.source_url or "",
+        "Filed Post I-Corps Participation": "" if p.post_icorps is None else p.post_icorps,
+        "Match Confidence": f"{p.confidence:.0f}",
+        "Match Method": p.match_method,
+        "Match Reasons": "; ".join(p.match_reasons),
+    }
+
+
 def _incorporation_type(legal_name: Optional[str]) -> str:
     name = (legal_name or "").lower()
     if re.search(r"\bl\.?l\.?c\b", name):
@@ -155,10 +211,10 @@ def _incorporation_type(legal_name: Optional[str]) -> str:
     return ""
 
 
-def _company_row(res: CompanyResult, published: List[FundingRecord]) -> Dict[str, Any]:
+def _company_row(res: CompanyResult, published: List[FundingRecord], patents: List[PatentRecord]) -> Dict[str, Any]:
     c, p, ident = res.company, res.profile, res.identity
     legal = _profile(res, "legal_name")
-    exists = any(s.startswith("ok") for s in res.source_status.values()) or bool(published)
+    exists = any(s.startswith("ok") for n, s in res.source_status.items() if n != "uspto") or bool(published)
     return {
         "Account Name": c.name,
         "I-Corps Team: CorpID": "; ".join(c.corp_ids),
@@ -189,6 +245,8 @@ def _company_row(res: CompanyResult, published: List[FundingRecord]) -> Dict[str
         "University Affiliation": _profile(res, "university") or "",
         "Funding Records": len(published),
         "Total Funding": f"{sum(r.amount or 0 for r in published):.2f}",
+        "Patents": len(patents),
+        "Granted Patents": sum(1 for p in patents if p.patent_number),
         "Identity Match Score": f"{ident.score:.0f}" if ident else "",
         "Identity Match Tier": ident.tier if ident else "",
         "Identity Match Method": ident.method if ident else "",

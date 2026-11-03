@@ -29,6 +29,7 @@ DEFAULT_HOST_INTERVALS = {
     "api.sam.gov": 1.0,
     "api.www.sbir.gov": 0.5,
     "www.tedcomd.com": 0.5,
+    "api.uspto.gov": 1.0,
 }
 
 
@@ -89,5 +90,5 @@ def get_json(url: str, **kwargs: Any) -> Any:
     return request("GET", url, headers={"Accept": "application/json"}, **kwargs).json()
 
 
-def post_json(url: str, payload: Dict[str, Any], **kwargs: Any) -> Any:
-    return request("POST", url, json=payload, headers={"Accept": "application/json"}, **kwargs).json()
+def post_json(url: str, payload: Dict[str, Any], headers: Optional[Dict[str, str]] = None, **kwargs: Any) -> Any:
+    return request("POST", url, json=payload, headers={"Accept": "application/json", **(headers or {})}, **kwargs).json()

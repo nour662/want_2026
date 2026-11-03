@@ -4,8 +4,8 @@ WATN pipeline runner: one process, many companies in parallel.
     prepare shared data (SAM lookup, SBIR bulk index, TEDCO archive)   once
     for each company, in a thread pool:                                parallel
         resolve identity  -> UEI + scored evidence
-        query sources     -> SAM, SBIR, USAspending, NSF, TEDCO (concurrently)
-        classify, merge, evaluate funding; merge company profile
+        query sources     -> SAM, SBIR, USAspending, NSF, TEDCO, USPTO (concurrently)
+        classify, merge, evaluate funding; merge company profile; score patents
         checkpoint result to records/<key>.json
     write outputs (CSV + review queue + run report)                    once
 
@@ -41,11 +41,12 @@ from app.services.watn_pipeline.matching import (
 )
 from app.services.watn_pipeline.models import CompanyInput, CompanyResult, FieldValue, MatchEvidence, SourceResult
 from app.services.watn_pipeline.sources import nsf, sbir, tedco, usaspending
+from app.services.watn_pipeline.sources.uspto import UsptoPatents
 from app.services.watn_pipeline.sources.sam import SamLookup
 
 logger = logging.getLogger(__name__)
 
-ALL_SOURCES = ("sam", "sbir", "usaspending", "nsf", "tedco")
+ALL_SOURCES = ("sam", "sbir", "usaspending", "nsf", "tedco", "uspto")
 
 
 @dataclass
@@ -61,6 +62,7 @@ class PipelineConfig:
     sbir_max_age_days: int = 7
     baseline_funding: Optional[Path] = None
     sam_db_url: Optional[str] = None
+    uspto_api_key: Optional[str] = None
 
 
 @dataclass
@@ -69,6 +71,7 @@ class _Context:
     sam: Optional[SamLookup] = None
     sbir: Optional[sbir.SbirIndex] = None
     tedco: Optional[tedco.TedcoArchive] = None
+    uspto: Optional[UsptoPatents] = None
     unavailable: Dict[str, str] = field(default_factory=dict)
 
 
@@ -94,7 +97,7 @@ def run_pipeline(
     results: Dict[str, CompanyResult] = {}
     todo: List[CompanyInput] = []
     for company in companies:
-        cached = _load_checkpoint(records_dir, company) if config.resume else None
+        cached = _load_checkpoint(records_dir, company, config.sources, ctx.unavailable) if config.resume else None
         if cached is not None:
             results[company.key] = cached
         else:
@@ -177,7 +180,14 @@ def _prepare(config: PipelineConfig) -> _Context:
                 )
         jobs["tedco"] = _tedco
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    if "uspto" in config.sources:
+        def _uspto() -> None:
+            ctx.uspto = UsptoPatents(config.uspto_api_key)
+            if not ctx.uspto.check():
+                ctx.unavailable["uspto"] = ctx.uspto.error or "unavailable"
+        jobs["uspto"] = _uspto
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
         for name, future in {name: pool.submit(job) for name, job in jobs.items()}.items():
             try:
                 future.result()
@@ -332,6 +342,12 @@ def _query_sources(company: CompanyInput, ctx: _Context, result: CompanyResult) 
             tasks["tedco"] = lambda: SourceResult("tedco", "error", f"unavailable: {ctx.unavailable['tedco']}")
         else:
             tasks["tedco"] = lambda: SourceResult("tedco", funding=ctx.tedco.find_funding(company))
+    if "uspto" in sources:
+        if "uspto" in ctx.unavailable:
+            tasks["uspto"] = lambda: SourceResult("uspto", "error", f"unavailable: {ctx.unavailable['uspto']}")
+        else:
+            names = _registered_names(ctx, uei) if is_accepted(result.identity) else []
+            tasks["uspto"] = lambda: SourceResult("uspto", patents=ctx.uspto.find(company, names))
 
     out: List[SourceResult] = []
     with ThreadPoolExecutor(max_workers=len(tasks) or 1) as pool:
@@ -340,7 +356,7 @@ def _query_sources(company: CompanyInput, ctx: _Context, result: CompanyResult) 
             name = futures[future]
             try:
                 res = future.result()
-                if res.status == "ok" and not res.funding and not res.profile:
+                if res.status == "ok" and not res.funding and not res.profile and not res.patents:
                     res.status = "no_data"
             except Exception as exc:
                 logger.warning("%s failed for %s: %s", name, company.name, exc)
@@ -348,6 +364,18 @@ def _query_sources(company: CompanyInput, ctx: _Context, result: CompanyResult) 
             result.source_status[name] = res.status if not res.message else f"{res.status}: {res.message}"
             out.append(res)
     return out
+
+
+def _registered_names(ctx: _Context, uei: Optional[str]) -> List[str]:
+    """SAM/SBIR names for a confirmed UEI; patents are often filed under the legal name."""
+    if not uei:
+        return []
+    names: List[str] = []
+    entity = ctx.sam.by_uei(uei) if ctx.sam and ctx.sam.available else None
+    names += [n for n in ((entity or {}).get("legal_name"), (entity or {}).get("dba_name")) if n]
+    if ctx.sbir and not ctx.sbir.error:
+        names += sorted({r.get("Company") for r in ctx.sbir.by_uei.get(uei, []) if r.get("Company")})
+    return names
 
 
 def _sam_source(ctx: _Context, uei: str) -> SourceResult:
@@ -385,6 +413,12 @@ def _assemble(company: CompanyInput, result: CompanyResult, source_results: List
                 rec.match_method = identity.method if identity else ""
             funding.append(classify.classify(rec))
 
+    for res in source_results:
+        for patent in res.patents:
+            if company.cohort_date and patent.filing_date:
+                patent.post_icorps = patent.filing_date >= company.cohort_date
+            result.patents.append(patent)
+
     before = len(funding)
     merged = merge.merge_funding(funding)
     result.duplicates_merged = before - len(merged)
@@ -409,7 +443,10 @@ def _checkpoint_path(records_dir: Path, company: CompanyInput) -> Path:
     return records_dir / f"{digest}.json"
 
 
-def _load_checkpoint(records_dir: Path, company: CompanyInput) -> Optional[CompanyResult]:
+def _load_checkpoint(
+    records_dir: Path, company: CompanyInput, sources: Sequence[str] = ALL_SOURCES,
+    unavailable_now: Optional[Dict[str, str]] = None,
+) -> Optional[CompanyResult]:
     path = _checkpoint_path(records_dir, company)
     if not path.exists():
         return None
@@ -419,6 +456,11 @@ def _load_checkpoint(records_dir: Path, company: CompanyInput) -> Optional[Compa
         logger.warning("Ignoring unreadable checkpoint %s", path)
         return None
     cached.company = company  # input may have been edited (new cohort date, contacts)
+    if any(name not in cached.source_status for name in sources):
+        return None  # checkpoint predates a newly enabled source (e.g. uspto); reprocess
+    unavailable_now = unavailable_now or {}
+    if any(cached.source_status[name].startswith("error: unavailable") and name not in unavailable_now for name in sources):
+        return None  # a source that was down (or had no API key) is available now
     return cached if cached.status == "completed" else None
 
 

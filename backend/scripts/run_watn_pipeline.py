@@ -26,6 +26,15 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
+try:  # API keys (USPTO_API_KEY, SAM_API_KEY, ...) may live in backend/.env or backend/scripts/.env
+    from dotenv import load_dotenv
+
+    for _env in (BACKEND_DIR / ".env", BACKEND_DIR / "scripts" / ".env"):
+        if _env.exists():
+            load_dotenv(_env, override=False)
+except ImportError:
+    pass
+
 from app.services.watn_pipeline import ALL_SOURCES, PipelineConfig, load_participants, run_pipeline  # noqa: E402
 
 

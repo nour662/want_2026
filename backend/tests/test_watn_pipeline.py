@@ -154,3 +154,68 @@ def test_tedco_ignores_generic_names_and_program_totals():
     assert archive.find_funding(CompanyInput(key="phase", name="Phase")) == []
     (thrive,) = archive.find_funding(CompanyInput(key="thrive company", name="Thrive Company"))
     assert not is_publishable(evaluate_funding(thrive, None))
+
+
+def _uspto_item(app_no, title, applicant, state="MD", inventors=(), assignee=None, patent_no=None, filed="2022-03-01"):
+    item = {
+        "applicationNumberText": app_no,
+        "applicationMetaData": {
+            "inventionTitle": title, "filingDate": filed, "patentNumber": patent_no,
+            "applicationStatusDescriptionText": "Patented Case" if patent_no else "Docketed New Case - Ready for Examination",
+            "firstApplicantName": applicant,
+            "applicantBag": [{"applicantNameText": applicant, "correspondenceAddressBag": [{"geographicRegionCode": state}]}],
+            "inventorBag": [{"inventorNameText": n} for n in inventors],
+            "cpcClassificationBag": ["H01L  31/0304"],
+        },
+    }
+    if assignee:
+        item["assignmentBag"] = [{"assigneeBag": [{"assigneeNameText": assignee, "assigneeAddress": {"geographicRegionCode": state}}]}]
+    return item
+
+
+def test_uspto_scores_company_owned_patents(monkeypatch):
+    from app.services.watn_pipeline.sources import uspto
+
+    items = [
+        _uspto_item("17123456", "UV photodetector", "N5 SENSORS, INC.", patent_no="11555555"),
+        _uspto_item("17999999", "Gas sensor", "N5 Sensors Inc", filed="2019-05-01"),
+        _uspto_item("16000001", "Unrelated", "N5 SENSORS HOLDINGS GMBH", state="BY"),
+        _uspto_item("16000002", "Univ patent", "University of Maryland", inventors=["Jane Doe"], assignee="N5 Sensors, Inc."),
+    ]
+    queries = []
+
+    def fake_post(url, payload, headers=None, **kw):
+        queries.append(payload["q"])
+        assert headers == {"X-API-KEY": "k"}
+        return {"count": len(items), "patentFileWrapperDataBag": items}
+
+    monkeypatch.setattr(uspto.http, "post_json", fake_post)
+    company = CompanyInput(key="n5 sensors", name="N5 Sensors", state="MD", contacts=["Jane Doe"],
+                           cohort_date=date(2020, 1, 1))
+    patents = {p.application_number: p for p in uspto.UsptoPatents("k").find(company, ["N5 SENSORS, INC."])}
+
+    assert len(queries) == 1 and "applicantNameText" in queries[0] and "assigneeNameText" in queries[0]
+    assert "inventor" not in queries[0].lower()  # company-only search
+    assert patents["17123456"].tier == "confirmed" and patents["17123456"].patent_number == "11555555"
+    assert patents["16000002"].owner_role == "assignee" and patents["16000002"].tier == "confirmed"
+    assert "16000001" not in patents or patents["16000001"].tier not in ("confirmed", "probable")
+
+
+def test_uspto_generic_name_goes_to_review_and_404_is_empty(monkeypatch):
+    import requests
+
+    from app.services.watn_pipeline.sources import uspto
+
+    def fake_post(url, payload, headers=None, **kw):
+        if "nothing" in payload["q"]:
+            resp = requests.Response()
+            resp.status_code = 404
+            raise requests.HTTPError(response=resp)
+        return {"count": 1, "patentFileWrapperDataBag": [_uspto_item("15000000", "Valve", "HALE PRODUCTS INC", state="PA")]}
+
+    monkeypatch.setattr(uspto.http, "post_json", fake_post)
+    source = uspto.UsptoPatents("k")
+    assert source.find(CompanyInput(key="nothing here", name="Nothing Here")) == []
+    hale = source.find(CompanyInput(key="hale", name="Hale", state="MD"))
+    assert all(p.tier not in ("confirmed", "probable") for p in hale)
+    assert uspto.UsptoPatents(api_key=None).available is (bool(__import__("os").getenv("USPTO_API_KEY")))

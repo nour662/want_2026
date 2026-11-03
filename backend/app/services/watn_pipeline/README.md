@@ -13,14 +13,14 @@ participants.csv ──► load_participants ──► one CompanyInput per comp
                                               │
           per company (thread pool, --workers):
              1. identity   input UEI (sanity-checked) → DUNS→UEI → scored name match
-             2. sources    SAM · SBIR · USAspending · NSF · TEDCO   (concurrently)
+             2. sources    SAM · SBIR · USAspending · NSF · TEDCO · USPTO   (concurrently)
              3. classify   funding source + stage
              4. merge      cross-source dedupe with provenance
-             5. evaluate   confidence, missing fields, post-I-Corps flag
+             5. evaluate   confidence, missing fields, post-I-Corps flag; score patents
              6. checkpoint records/<hash>.json
                                               │
           outputs: company_info.csv · funding_info.csv · new_funding_records.csv
-                   review_queue.csv · run_report.json · progress.json
+                   patents.csv · review_queue.csv · run_report.json · progress.json
 ```
 
 ## Running
@@ -53,11 +53,14 @@ Environment:
 | --- | --- |
 | `SAM_DB_URL` (or `DATABASE_URL`) | Local `sam_entity_public_v2` extract — preferred SAM source |
 | `SAM_API_KEY` | SAM.gov Entity API fallback (rate-limited) |
+| `USPTO_API_KEY` | USPTO Open Data Portal patent search (free key from data.uspto.gov) |
 | `WATN_CACHE_DIR` | Where the SBIR bulk file and TEDCO article cache live (default `backend/.cache/watn`) |
 | `WATN_WORKERS` | Default parallelism |
 
 Without either SAM setting the SAM source is reported as unavailable and
-identity resolution falls back to SBIR firm records.
+identity resolution falls back to SBIR firm records. Without `USPTO_API_KEY`
+the patent source is reported as unavailable. The CLI reads keys from
+`backend/.env` or `backend/scripts/.env` as well as the environment.
 
 ## Sources
 
@@ -67,6 +70,7 @@ identity resolution falls back to SBIR firm records.
 | SBIR | UEI, DUNS, name | SBIR.gov's public bulk award file, refreshed weekly. The SBIR JSON API answers 403, so this replaces the Selenium scraper. Also maps DUNS → UEI. |
 | USAspending | UEI | Contracts (A–D) and grants (02–05); loans excluded. Each result's recipient UEI is re-checked. |
 | NSF | UEI | Recipient UEI re-checked. |
+| USPTO | company name (applicant or assignee) | Open Data Portal application search; granted and pending applications. Only the company is searched, never inventors. Also searches the registered SAM/SBIR names once the UEI is confirmed. |
 | TEDCO | name, participant names | Crawls tedcomd.com articles once per run (incremental cache); can import the old `tedco_scraper` CSV. Finds the amount and TEDCO fund nearest each mention. |
 
 TEDCO's site now sits behind Cloudflare bot protection and answers 403 to
@@ -90,6 +94,14 @@ Each funding record carries a confidence (the identity score for UEI-based
 sources, the mention score for TEDCO) and review flags. Records only reach
 `funding_info.csv` when they are confident and have a positive amount and an
 award date. The rest go to `review_queue.csv` with the reason.
+
+Patents are scored the same way as identities: the applicant or assignee
+name against the company name, plus state, plus a bonus when a participant
+is one of the inventors. Confirmed and probable matches go to `patents.csv`
+(and the `Patents` / `Granted Patents` counts in `company_info.csv`); review
+matches go to `review_queue.csv` as `patent`; weaker ones are dropped. Each
+patent records whether it was filed on or after the company's earliest
+cohort date.
 
 ## How records are merged
 

@@ -90,6 +90,44 @@ class FundingRecord:
 
 
 @dataclass
+class PatentRecord:
+    """A US patent application (granted or pending) owned by the company."""
+
+    application_number: str
+    title: Optional[str] = None
+    patent_number: Optional[str] = None
+    publication_number: Optional[str] = None
+    status: Optional[str] = None
+    application_type: Optional[str] = None
+    filing_date: Optional[date] = None
+    publication_date: Optional[date] = None
+    grant_date: Optional[date] = None
+    owner: Optional[str] = None  # applicant/assignee name that matched the company
+    owner_role: Optional[str] = None  # "applicant" | "assignee"
+    owner_state: Optional[str] = None
+    inventors: List[str] = field(default_factory=list)
+    cpc_codes: List[str] = field(default_factory=list)
+    source_url: Optional[str] = None
+    # Evaluation
+    confidence: float = 0.0
+    tier: str = ""
+    match_method: str = ""
+    match_reasons: List[str] = field(default_factory=list)
+    post_icorps: Optional[bool] = None  # filed on/after the earliest cohort date
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PatentRecord":
+        data = dict(data)
+        for key in ("filing_date", "publication_date", "grant_date"):
+            if isinstance(data.get(key), str):
+                data[key] = date.fromisoformat(data[key])
+        return cls(**data)
+
+
+@dataclass
 class SourceResult:
     """What one source returned for one company."""
 
@@ -98,6 +136,7 @@ class SourceResult:
     message: str = ""
     profile: Dict[str, Any] = field(default_factory=dict)
     funding: List[FundingRecord] = field(default_factory=list)
+    patents: List[PatentRecord] = field(default_factory=list)
 
 
 @dataclass
@@ -107,6 +146,7 @@ class CompanyResult:
     resolved_uei: Optional[str] = None
     profile: Dict[str, FieldValue] = field(default_factory=dict)
     funding: List[FundingRecord] = field(default_factory=list)
+    patents: List[PatentRecord] = field(default_factory=list)  # accepted and review-tier matches
     source_status: Dict[str, str] = field(default_factory=dict)
     review_reasons: List[str] = field(default_factory=list)
     duplicates_merged: int = 0
@@ -128,6 +168,7 @@ class CompanyResult:
             resolved_uei=data.get("resolved_uei"),
             profile={k: FieldValue(**v) for k, v in (data.get("profile") or {}).items()},
             funding=[FundingRecord.from_dict(f) for f in data.get("funding") or []],
+            patents=[PatentRecord.from_dict(p) for p in data.get("patents") or []],
             source_status=data.get("source_status") or {},
             review_reasons=data.get("review_reasons") or [],
             duplicates_merged=data.get("duplicates_merged", 0),
